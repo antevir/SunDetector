@@ -11,11 +11,17 @@
 #include "Log.h"
 #include "pins.h"
 #include "server.h"
+#include "RGBLed.h"
 
 #include "settings.h" // Create from settings.template
 
+#define LED_PAIRING_STATE Color::Blue, 1000, 1000
+#define LED_PAIRING_ERROR Color::Red, 100, 200, 3
+#define LED_PAIRING_SUCCESS Color::Green, 100, 200, 3
+
 static WiFiUDP ntpUDP;
 static OrviboS20Device s20;
+static RGBLed led(RED_LED_PIN, GREEN_LED_PIN, BLUE_LED_PIN);
 
 NTPClient timeClient(ntpUDP, NTP_SERVER, NTP_CLOCK_OFFSET, 60000);
 
@@ -72,7 +78,6 @@ static void setupS20()
   // Start S20 communication (this class handles the communication for all OrviboS20Device instances)
   OrviboS20.begin();
 
-#if ORVIBO_PAIRING_ENABLED
   // Set callbacks for OrviboS20WiFiPair
   OrviboS20WiFiPair.onFoundDevice([](const uint8_t mac[]) {
     // This is called when OrviboS20WiFiPair finds a device with SSID "WiWo-S20"
@@ -89,13 +94,17 @@ static void setupS20()
     {
     case REASON_TIMEOUT:
       Log.warn("<OrviboS20WiFiPair> Pairing timeout");
+      led.stopBlink();
       break;
     case REASON_COMMAND_FAILED:
       Log.error("<OrviboS20WiFiPair> Command failed");
+      led.startBlink(LED_PAIRING_ERROR);
       break;
     case REASON_STOPPED_BY_USER:
+      led.stopBlink();
+      break;
     case REASON_PAIRING_SUCCESSFUL:
-      // When reason == REASON_PAIRING_SUCCESSFUL onSuccess() will also be called
+      led.startBlink(LED_PAIRING_SUCCESS);
       break;
     }
   });
@@ -104,9 +113,13 @@ static void setupS20()
     Log.info("<OrviboS20WiFiPair> Pairing successful!");
   });
 
-  // Start S20 pairing process and make it connect to our AP
-  OrviboS20WiFiPair.begin(WIFI_AP_SSID, WIFI_AP_PASSKEY);
-#endif
+  pinMode(BUTTON_PIN, INPUT);
+  if (digitalRead(BUTTON_PIN) == LOW)
+  {
+    // Start S20 pairing process and make it connect to our AP
+    led.startBlink(LED_PAIRING_STATE);
+    OrviboS20WiFiPair.begin(WIFI_AP_SSID, WIFI_AP_PASSKEY);
+  }
 }
 
 static void setupOta()
@@ -179,15 +192,15 @@ static void handleS20()
 {
   // Handle S20 communication
   OrviboS20.handle();
-#if ORVIBO_PAIRING_ENABLED
   // Handle WiFi pairing communication
   OrviboS20WiFiPair.handle();
-#endif
 }
 
 void setup()
 {
   Serial.begin(115200);
+  pinMode(ONBOARD_LED_PIN, OUTPUT);
+  digitalWrite(ONBOARD_LED_PIN, LOW);
 
   Log.begin();
 
@@ -202,10 +215,10 @@ void setup()
 
   Log.info("Free stack: %d", ESP.getFreeContStack());
 
+  server_init();
+
   setupOta();
   setupS20();
-
-  server_init();
 }
 
 void loop()
@@ -215,4 +228,5 @@ void loop()
   handleNtp();
   handleS20();
   server_handle();
+  led.handle();
 }
