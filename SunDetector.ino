@@ -7,6 +7,9 @@
 #include <TimeLib.h>
 #include <OrviboS20.h>
 #include <OrviboS20WiFiPair.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <MedianFilterLib.h>
 
 #include "Log.h"
 #include "pins.h"
@@ -15,12 +18,19 @@
 
 #include "settings.h" // Create from settings.template
 
+#define TEMP_SAMPLE_INTERVAL_MS (1000 * 10)
+#define TEMP_FILTER_LEN 5
+#define PUMP_ON_TEMP_THRESHOLD 30.0f
+#define PUMP_OFF_TEMP_THRESHOLD 20.0f
+
 #define LED_PAIRING_STATE Color::Blue, 1000, 1000
 #define LED_PAIRING_ERROR Color::Red, 100, 200, 3
 #define LED_PAIRING_SUCCESS Color::Green, 100, 200, 3
 
 static WiFiUDP ntpUDP;
 static OrviboS20Device s20;
+static OneWire oneWire(ONE_WIRE_PIN);
+static DallasTemperature sensors(&oneWire);
 static RGBLed led(RED_LED_PIN, GREEN_LED_PIN, BLUE_LED_PIN);
 
 NTPClient timeClient(ntpUDP, NTP_SERVER, NTP_CLOCK_OFFSET, 60000);
@@ -39,15 +49,15 @@ static void setupWifi()
   WiFi.mode(WIFI_AP_STA);
 
   WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &event) {
-    Serial.printf("WiFi connected, RSSI: %d dBm", WiFi.RSSI());
+    Serial.printf("WiFi connected, RSSI: %d dBm\n", WiFi.RSSI());
   });
 
   WiFi.onStationModeGotIP([](const WiFiEventStationModeGotIP &event) {
-    Serial.printf("WiFi got IP, RSSI: %d dBm", WiFi.RSSI());
+    Serial.printf("WiFi got IP, RSSI: %d dBm\n", WiFi.RSSI());
   });
 
   // Setup WiFi station
-  Serial.printf("Connecting WiFi to \"%s\"", WIFI_STA_SSID);
+  Serial.printf("Connecting WiFi to \"%s\"\n", WIFI_STA_SSID);
   WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASSKEY);
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
@@ -66,12 +76,12 @@ static void setupS20()
     Log.info("S20 disconnected!");
   });
   s20.onStateChange([](OrviboS20Device &device, bool new_state) {
-    Log.info("S20 state changed to: %d\n", new_state);
+    Log.info("S20 state changed to: %d", new_state);
   });
 
   // Set OrviboS20 communication callbacks
   OrviboS20.onFoundDevice([](uint8_t mac[]) {
-    Log.info("<OrviboS20> Detected new Orvibo device: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    Log.info("<OrviboS20> Detected new Orvibo device: %02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   });
 
@@ -174,6 +184,11 @@ static void handleNtp()
 {
   static long last_time = 0;
 
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return;
+  }
+
   if (millis() - last_time < 10000)
   {
     return;
@@ -194,6 +209,52 @@ static void handleS20()
   OrviboS20.handle();
   // Handle WiFi pairing communication
   OrviboS20WiFiPair.handle();
+}
+
+static void handlePump(float temp)
+{
+  static bool pumpState = false;
+  if (pumpState)
+  {
+    if (temp < PUMP_OFF_TEMP_THRESHOLD)
+    {
+      pumpState = false;
+    }
+  }
+  else
+  {
+    if (temp > PUMP_ON_TEMP_THRESHOLD)
+    {
+      pumpState = true;
+    }
+  }
+  s20.setState(pumpState);
+}
+
+static void eachSecond()
+{
+  static long lastSampleTs = 0;
+  static bool requestingTemp = false;
+  static MedianFilter<float> medianFilter(TEMP_FILTER_LEN);
+
+  if (millis() - lastSampleTs > TEMP_SAMPLE_INTERVAL_MS)
+  {
+    requestingTemp = true;
+    lastSampleTs = millis();
+    Log.info("Requesting temperature");
+    sensors.requestTemperatures();
+    return; // Get the values next second
+  }
+
+  if (requestingTemp)
+  {
+    requestingTemp = false;
+    float temp = sensors.getTempCByIndex(0);
+    medianFilter.AddValue(temp);
+    float filteredTemp = medianFilter.GetFiltered();
+    Log.info("Temperature is: %0.1f, filtered: %0.1f", temp, filteredTemp);
+    handlePump(filteredTemp);
+  }
 }
 
 void setup()
@@ -229,4 +290,11 @@ void loop()
   handleS20();
   server_handle();
   led.handle();
+
+  static int last_sec = 0;
+  if (second() != last_sec)
+  {
+    last_sec = second();
+    eachSecond();
+  }
 }

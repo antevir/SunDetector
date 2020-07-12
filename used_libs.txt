@@ -1,2 +1,5 @@
 Time v1.6.0
 Orvibo WiWo S20 Library v1.0.0
+DallasTemperature v3.8.0
+OneWire v2.3.5
+MedianFilterLib v1.0.0
