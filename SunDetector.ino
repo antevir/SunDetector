@@ -5,6 +5,8 @@
 #include <WiFiUdp.h>
 
 #include <TimeLib.h>
+#include <OrviboS20.h>
+#include <OrviboS20WiFiPair.h>
 
 #include "Log.h"
 #include "pins.h"
@@ -13,16 +15,22 @@
 #include "settings.h" // Create from settings.template
 
 static WiFiUDP ntpUDP;
+static OrviboS20Device s20;
 
 NTPClient timeClient(ntpUDP, NTP_SERVER, NTP_CLOCK_OFFSET, 60000);
 
 static void setupWifi()
 {
   WiFi.disconnect();
-  Serial.printf("Connecting WiFi to \"%s\"", WIFI_SSID);
+  WiFi.softAPdisconnect();
 
-  WiFi.mode(WIFI_STA);
-  //WiFi.softAPdisconnect();
+  // There seems to be an issue with the ESP DHCP server and a re-connecting S20
+  // If you reboot the ESP with a S20 device connected without this delay the IP assignment
+  // will not work and also the wifi_softap_get_station_info() will get stuck.
+  Serial.println("Long delay...");
+  delay(30000);
+
+  WiFi.mode(WIFI_AP_STA);
 
   WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &event) {
     Serial.printf("WiFi connected, RSSI: %d dBm", WiFi.RSSI());
@@ -32,9 +40,73 @@ static void setupWifi()
     Serial.printf("WiFi got IP, RSSI: %d dBm", WiFi.RSSI());
   });
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSKEY);
+  // Setup WiFi station
+  Serial.printf("Connecting WiFi to \"%s\"", WIFI_STA_SSID);
+  WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASSKEY);
   WiFi.setAutoConnect(true);
   WiFi.setAutoReconnect(true);
+
+  // Setup WiFi AP
+  WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSKEY);
+}
+
+static void setupS20()
+{
+  // Set callbacks for S20 device
+  s20.onConnect([](OrviboS20Device &device) {
+    Log.info("S20 connected!");
+  });
+  s20.onDisconnect([](OrviboS20Device &device) {
+    Log.info("S20 disconnected!");
+  });
+  s20.onStateChange([](OrviboS20Device &device, bool new_state) {
+    Log.info("S20 state changed to: %d\n", new_state);
+  });
+
+  // Set OrviboS20 communication callbacks
+  OrviboS20.onFoundDevice([](uint8_t mac[]) {
+    Log.info("<OrviboS20> Detected new Orvibo device: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  });
+
+  // Start S20 communication (this class handles the communication for all OrviboS20Device instances)
+  OrviboS20.begin();
+
+#if ORVIBO_PAIRING_ENABLED
+  // Set callbacks for OrviboS20WiFiPair
+  OrviboS20WiFiPair.onFoundDevice([](const uint8_t mac[]) {
+    // This is called when OrviboS20WiFiPair finds a device with SSID "WiWo-S20"
+    // OrviboS20WiFiPair will then try to connect to the device
+    Log.info("<OrviboS20WiFiPair> Found S20 device in pairing mode");
+  });
+  OrviboS20WiFiPair.onSendingCommand([](const uint8_t mac[], const char cmd[]) {
+    // This is called for each command sent to the S20 device to be paired
+    Log.info("<OrviboS20WiFiPair> Sending command: %s", cmd);
+  });
+  OrviboS20WiFiPair.onStopped([](OrviboStopReason reason) {
+    // This is called when the pairing process is stopped
+    switch (reason)
+    {
+    case REASON_TIMEOUT:
+      Log.warn("<OrviboS20WiFiPair> Pairing timeout");
+      break;
+    case REASON_COMMAND_FAILED:
+      Log.error("<OrviboS20WiFiPair> Command failed");
+      break;
+    case REASON_STOPPED_BY_USER:
+    case REASON_PAIRING_SUCCESSFUL:
+      // When reason == REASON_PAIRING_SUCCESSFUL onSuccess() will also be called
+      break;
+    }
+  });
+  OrviboS20WiFiPair.onSuccess([](const uint8_t mac[]) {
+    // The pairing is now complete and the S20 device should now connect to our "WIWO" SSID
+    Log.info("<OrviboS20WiFiPair> Pairing successful!");
+  });
+
+  // Start S20 pairing process and make it connect to our AP
+  OrviboS20WiFiPair.begin(WIFI_AP_SSID, WIFI_AP_PASSKEY);
+#endif
 }
 
 static void setupOta()
@@ -103,6 +175,16 @@ static void handleNtp()
   }
 }
 
+static void handleS20()
+{
+  // Handle S20 communication
+  OrviboS20.handle();
+#if ORVIBO_PAIRING_ENABLED
+  // Handle WiFi pairing communication
+  OrviboS20WiFiPair.handle();
+#endif
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -121,6 +203,7 @@ void setup()
   Log.info("Free stack: %d", ESP.getFreeContStack());
 
   setupOta();
+  setupS20();
 
   server_init();
 }
@@ -130,5 +213,6 @@ void loop()
   MDNS.update();
   ArduinoOTA.handle();
   handleNtp();
+  handleS20();
   server_handle();
 }

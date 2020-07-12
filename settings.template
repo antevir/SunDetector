@@ -2,8 +2,11 @@
 
 #define HOSTNAME "sundetector"
 
-#define WIFI_SSID "my_ssid"
-#define WIFI_PASSKEY "password"
+#define WIFI_STA_SSID "my_ssid"
+#define WIFI_STA_PASSKEY "password"
+
+#define WIFI_AP_SSID "ORVIBO"
+#define WIFI_AP_PASSKEY "WIWO_S20"
 
 #undef OTA_PASSWORD
 
@@ -14,3 +17,5 @@
 
 #define NTP_SERVER "europe.pool.ntp.org"
 #define NTP_CLOCK_OFFSET (3600 * 2) /* Sweden +1, summertime +1 */
+
+#define ORVIBO_PAIRING_ENABLED 1
