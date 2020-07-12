@@ -1,0 +1,16 @@
+#pragma once
+
+#define HOSTNAME "sundetector"
+
+#define WIFI_SSID "my_ssid"
+#define WIFI_PASSKEY "password"
+
+#undef OTA_PASSWORD
+
+#define LOG_USE_SYSLOG
+//#define LOG_USE_SERIAL
+#define LOG_SYSLOG_SERVER "192.168.0.13"
+#define LOG_SERIAL_BAUDRATE 115200
+
+#define NTP_SERVER "europe.pool.ntp.org"
+#define NTP_CLOCK_OFFSET (3600 * 2) /* Sweden +1, summertime +1 */
